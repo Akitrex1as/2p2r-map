@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Карта світу 2P2R</title>
+<meta name="description" content="Карта сервера 2P2R: верхній світ і Незер згори, оновлюється щоночі.">
+<link rel="icon" href="https://akitrex1as.github.io/2p2r-wiki/tex/body_earth.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<style>
+:root { --bg: #15171b; --bar: #0d0e11; --ink: #e8e6e1; --muted: #9a9ca3; --line: #2a2d33; --accent: #e0442c; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: fixed; inset: 0 0 auto; z-index: 1000; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: max(8px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 8px max(14px, env(safe-area-inset-left));
+  background: var(--bar); border-bottom: 3px solid var(--accent); }
+header .logo { background: var(--accent); color: #fff; font-weight: 800; padding: 2px 8px; border-radius: 3px; text-decoration: none; }
+header h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .02em; }
+header .dims { display: flex; gap: 4px; }
+header button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+header button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+header .info { margin-left: auto; color: var(--muted); font-size: 12.5px; display: flex; gap: 12px; flex-wrap: wrap; }
+header a { color: var(--ink); }
+#map { position: fixed; inset: 0; background: var(--bg); }
+.leaflet-container { background: var(--bg); font: inherit; }
+.leaflet-tile { image-rendering: pixelated; }
+.coords { background: rgba(13,14,17,.85); color: var(--ink); padding: 4px 9px; border-radius: 6px; font: 600 13px ui-monospace, Consolas, monospace; }
+.spawn { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.4); }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--bar); color: var(--ink); }
+.leaflet-popup-content { font: 13px/1.5 system-ui, sans-serif; }
+.leaflet-popup-content button { font: inherit; margin-top: 4px; color: var(--ink); background: var(--line); border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="https://akitrex1as.github.io/2p2r-wiki/">2P2R</a>
+  <h1>Карта світу</h1>
+  <div class="dims" id="dims"></div>
+  <div class="info"><span id="updated"></span><a href="https://akitrex1as.github.io/2p2r-wiki/">Енциклопедія</a></div>
+</header>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+(async () => {
+  const info = await (await fetch("map.json", { cache: "no-cache" })).json();
+  const bar = document.querySelector("header");
+  const map = L.map("map", { crs: L.CRS.Simple, minZoom: -5, maxZoom: 3, zoomControl: true, attributionControl: false });
+  const ll = (x, z) => L.latLng(-z, x);                       // block x/z -> map; north is up
+  let layer = null, dim = null;
+  const fit = () => { document.getElementById("map").style.top = bar.offsetHeight + "px"; map.invalidateSize(); };
+  window.addEventListener("resize", fit); fit();
+  document.getElementById("updated").textContent = "оновлено " + info.updated;
+
+  const spawn = L.marker(ll(info.spawn[0], info.spawn[1]), { icon: L.divIcon({ className: "spawn", iconSize: [14, 14] }) })
+    .bindTooltip("Спавн", { direction: "top", offset: [0, -8] });
+
+  function show(id, view) {
+    const d = info.dims.find(x => x.id === id) || info.dims[0];
+    dim = d.id;
+    if (layer) map.removeLayer(layer);
+    const b = d.bounds;
+    layer = L.tileLayer("tiles/" + d.id + "/{z}/{x}_{y}.webp?v=" + encodeURIComponent(info.updated), {
+      tileSize: 512, noWrap: true, minZoom: -5, maxZoom: 3, minNativeZoom: -5, maxNativeZoom: 0,
+      bounds: L.latLngBounds(ll(b[0], b[3]), ll(b[2], b[1])) }).addTo(map);
+    if (d.id === "overworld") spawn.addTo(map); else spawn.remove();
+    document.querySelectorAll("#dims button").forEach(x => x.setAttribute("aria-pressed", x.dataset.id === d.id));
+    if (view) map.setView(ll(view.x, view.z), view.zoom);
+    else map.setView(d.id === "overworld" ? ll(info.spawn[0], info.spawn[1]) : ll((b[0] + b[2]) / 2, (b[1] + b[3]) / 2), -2);
+    saveHash();
+  }
+  for (const d of info.dims) {
+    const btn = document.createElement("button");
+    btn.textContent = d.title; btn.dataset.id = d.id; btn.onclick = () => show(d.id);
+    document.getElementById("dims").append(btn);
+  }
+
+  // coordinates under the pointer
+  const Coords = L.Control.extend({ onAdd() { const el = L.DomUtil.create("div", "coords"); el.textContent = "X — Z —"; return el; } });
+  const coords = new Coords({ position: "bottomleft" }).addTo(map);
+  map.on("mousemove", e => { coords.getContainer().textContent = "X " + Math.floor(e.latlng.lng) + "  Z " + Math.floor(-e.latlng.lat); });
+
+  // click: a link to this exact spot, to send to friends
+  map.on("click", e => {
+    const x = Math.floor(e.latlng.lng), z = Math.floor(-e.latlng.lat);
+    const url = location.href.split("#")[0] + "#" + [dim, x, z, map.getZoom()].join(",");
+    const el = document.createElement("div");
+    el.innerHTML = "<b>X " + x + "  Z " + z + "</b><br>";
+    const b = document.createElement("button"); b.textContent = "Скопіювати посилання";
+    b.onclick = () => navigator.clipboard.writeText(url).then(() => b.textContent = "Скопійовано", () => prompt("Посилання:", url));
+    el.append(b);
+    L.popup().setLatLng(e.latlng).setContent(el).openOn(map);
+  });
+
+  // #dim,x,z,zoom keeps the view in the address bar
+  function saveHash() {
+    if (!dim) return;
+    const c = map.getCenter();
+    history.replaceState(null, "", "#" + [dim, Math.floor(c.lng), Math.floor(-c.lat), map.getZoom()].join(","));
+  }
+  map.on("moveend zoomend", saveHash);
+  const h = location.hash.slice(1).split(",");
+  if (h.length === 4 && info.dims.some(d => d.id === h[0])) show(h[0], { x: +h[1], z: +h[2], zoom: +h[3] });
+  else show("overworld");
+})();
+</script>
+</body>
+</html>
